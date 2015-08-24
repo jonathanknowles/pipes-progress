@@ -1,14 +1,24 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards            #-}
 
-module Pipes.Progress where
+module Pipes.Progress
+    ( Counter (Counter)
+    , Monitor
+    , Period (Period)
+    , Value (Value, FinalValue)
+    , accumulate
+    , every
+    , isFinal
+    , silent
+    , value
+    , withMonitor ) where
 
 import Control.Applicative
 import Control.Concurrent       hiding (yield)
 import Control.Concurrent.Async
 import Control.Monad
 import Data.Time.Clock
-import Pipes
+import Pipes                    hiding (every)
 import Pipes.Concurrent
 import Pipes.Prelude
 import Prelude                  hiding (map, take, takeWhile)
@@ -25,6 +35,9 @@ asyncWithGC a = async $ do
     performGC
     return r
 
+every :: Period -> Pipe (Value a) (Value a) IO ()
+every = yieldPeriodicallyUntil isFinal
+
 yieldUntil :: (a -> Bool) -> Pipe a a IO ()
 yieldUntil isFinal = loop where
     loop = do
@@ -34,9 +47,6 @@ yieldUntil isFinal = loop where
 
 yieldPeriodically :: Period -> Pipe a a IO ()
 yieldPeriodically = yieldPeriodicallyUntil $ const False
-
-every :: Period -> Pipe (Update a) (Update a) IO ()
-every = yieldPeriodicallyUntil isFinal
 
 yieldPeriodicallyUntil :: (a -> Bool) -> Period -> Pipe a a IO ()
 yieldPeriodicallyUntil isFinal (Period p) =
@@ -54,22 +64,22 @@ pauseThreadUntil t = do
         LT -> threadDelay $ truncate $ diffUTCTime t now * 1000000
         _  -> return ()
 
-type Monitor a = Consumer (Update a) IO ()
+type Monitor a = Consumer (Value a) IO ()
 
-data Update a = Update a | FinalUpdate a
+data Value a = Value a | FinalValue a
 
-isFinal (     Update _) = False
-isFinal (FinalUpdate _) = True
+isFinal (     Value _) = False
+isFinal (FinalValue _) = True
 
-value (     Update v) = v
-value (FinalUpdate v) = v
+value (     Value v) = v
+value (FinalValue v) = v
 
-instance Functor Update where
-    fmap f (     Update v) =      Update $ f v
-    fmap f (FinalUpdate v) = FinalUpdate $ f v
+instance Functor Value where
+    fmap f (     Value v) =      Value $ f v
+    fmap f (FinalValue v) = FinalValue $ f v
 
-nullMonitor :: Monitor a
-nullMonitor = yieldPeriodicallyUntil isFinal 0.1 >-> forever await
+silent :: Monitor a
+silent = yieldPeriodicallyUntil isFinal 0.1 >-> forever await
 
 data Counter chunk count m = Counter
     { counterStart :: count
@@ -89,15 +99,15 @@ withMonitor
     -> (Pipe chunk chunk m () -> m a)
     -> m a
 withMonitor monitor Counter {..} run = do
-    (o, i) <- liftIO $ spawn $ latest $ Update counterStart
+    (o, i) <- liftIO $ spawn $ latest $ Value counterStart
     e <- liftIO $ asyncWithGC $
         runEffect $
-            (yield (Update counterStart) >> fromInput i)
-            >-> yieldUntil isFinal
+            (yield (Value counterStart) >> fromInput i)
+            -- >-> yieldUntil isFinal
             >-> monitor
-    result <- run $ tee $ counterPipe >-> map Update >-> toOutput o
+    result <- run $ tee $ counterPipe >-> map Value >-> toOutput o
     liftIO $ do
-        atomically $ recv i >>= send o . FinalUpdate . maybe counterStart value
+        atomically $ recv i >>= send o . FinalValue . maybe counterStart value
         wait e
     return result
 
