@@ -25,6 +25,13 @@ asyncWithGC a = async $ do
     performGC
     return r
 
+yieldUntil :: (a -> Bool) -> Pipe a a IO ()
+yieldUntil isFinal = loop where
+    loop = do
+        v <- await
+        yield v
+        unless (isFinal v) loop
+
 yieldPeriodically :: Period -> Pipe a a IO ()
 yieldPeriodically = yieldPeriodicallyUntil $ const False
 
