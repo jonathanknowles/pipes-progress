@@ -1,12 +1,9 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE RecordWildCards            #-}
 
 module Pipes.Progress
-    ( Counter (Counter)
-    , Monitor
+    ( Monitor
     , Period (Period)
     , Value (Value, FinalValue)
-    , accumulate
     , every
     , isFinal
     , silent
@@ -16,6 +13,7 @@ module Pipes.Progress
 import Control.Applicative
 import Control.Concurrent       hiding (yield)
 import Control.Concurrent.Async
+import Control.Foldl                   (Fold)
 import Control.Monad
 import Data.Time.Clock
 import Pipes                    hiding (every)
@@ -23,11 +21,11 @@ import Pipes.Concurrent
 import Pipes.Prelude
 import Prelude                  hiding (map, take, takeWhile)
 
+import qualified Control.Foldl as F
+import qualified Pipes.Prelude as P
+
 newtype Period = Period NominalDiffTime
     deriving (Enum, Eq, Fractional, Num, Ord, Real, RealFrac, Show)
-
-accumulate :: (Monad m, Num i) => i -> Pipe i i m r
-accumulate c = yield c >> await >>= accumulate . (c +)
 
 asyncWithGC :: IO a -> IO (Async a)
 asyncWithGC a = async $ do
@@ -81,10 +79,6 @@ instance Functor Value where
 silent :: Monitor a
 silent = yieldPeriodicallyUntil isFinal 0.1 >-> forever await
 
-data Counter chunk count m = Counter
-    { counterStart :: count
-    , counterPipe  :: Pipe chunk count m () }
-
 -- | periods: │<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│
 -- |  chunks:    c c c c c c     c c c c c c c         c c c c c     c c c c
 -- | updates: u  │    u       u       u       u       u       u       u    │  u
@@ -95,10 +89,12 @@ data Counter chunk count m = Counter
 withMonitor
     :: MonadIO m
     => Monitor count
-    -> Counter chunk count m
+    -> Fold chunk count
     -> (Pipe chunk chunk m () -> m a)
     -> m a
-withMonitor monitor Counter {..} run = do
+withMonitor monitor f run = do
+    let counterStart = F.fold f []
+    let counterPipe = F.purely P.scan f
     (o, i) <- liftIO $ spawn $ latest $ Value counterStart
     e <- liftIO $ asyncWithGC $
         runEffect $

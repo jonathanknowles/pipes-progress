@@ -21,6 +21,7 @@ library
     build-depends:
         base >=4.8 && <4.9,
         async,
+        foldl,
         pipes,
         pipes-concurrency,
         time
