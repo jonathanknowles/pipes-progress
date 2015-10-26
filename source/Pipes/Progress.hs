@@ -74,11 +74,11 @@ silent :: Monitor a
 silent = yieldPeriodicallyUntil isFinal 0.1 >-> forever await
 
 -- | periods: │<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│
--- |  chunks:    c c c c c c     c c c c c c c         c c c c c     c c c c
--- | updates: u  │    u       u       u       u       u       u       u    │  u
--- |          │  │                                                         │  │
--- |    first─┘  └─first                                             final─┘  └─last
--- |   update      chunk                                             chunk      update
+-- |  chunks:    c c c c c c     c c c c c c c         c c c c c     c c c
+-- | updates: u  │    u       u       u       u       u       u       u  │u
+-- |          │  │                                                       ││
+-- |    first─┘  └─first                                           final─┘└─last
+-- |   update      chunk                                           chunk    update
 -- |
 withMonitor
     :: MonadIO m
