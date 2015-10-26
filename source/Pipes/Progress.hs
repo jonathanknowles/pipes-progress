@@ -27,12 +27,6 @@ import qualified Pipes.Prelude as P
 newtype Period = Period NominalDiffTime
     deriving (Enum, Eq, Fractional, Num, Ord, Real, RealFrac, Show)
 
-asyncWithGC :: IO a -> IO (Async a)
-asyncWithGC a = async $ do
-    r <- a
-    performGC
-    return r
-
 every :: Period -> Pipe (Value a) (Value a) IO ()
 every = yieldPeriodicallyUntil isFinal
 
@@ -89,21 +83,26 @@ silent = yieldPeriodicallyUntil isFinal 0.1 >-> forever await
 withMonitor
     :: MonadIO m
     => Monitor count
-    -> Fold chunk count
+    -> count
+    -> Pipe chunk count m () -- this should be a pipe
     -> (Pipe chunk chunk m () -> m a)
     -> m a
-withMonitor monitor f run = do
-    let counterStart = F.fold f []
-    let counterPipe = F.purely P.scan f
-    (o, i) <- liftIO $ spawn $ latest $ Value counterStart
+withMonitor monitor count counter run = do
+    (o, i) <- liftIO $ spawn $ latest $ Value count
     e <- liftIO $ asyncWithGC $
         runEffect $
-            (yield (Value counterStart) >> fromInput i)
+            (yield (Value count) >> fromInput i)
             -- >-> yieldUntil isFinal
             >-> monitor
-    result <- run $ tee $ counterPipe >-> map Value >-> toOutput o
+    result <- run $ tee $ counter >-> map Value >-> toOutput o
     liftIO $ do
-        atomically $ recv i >>= send o . FinalValue . maybe counterStart value
+        atomically $ recv i >>= send o . FinalValue . maybe count value
         wait e
     return result
+
+asyncWithGC :: IO a -> IO (Async a)
+asyncWithGC a = async $ do
+    r <- a
+    performGC
+    return r
 
