@@ -1,34 +1,33 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase                 #-}
+{-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 
 module Pipes.Progress
     ( Monitor
-    , Period (Period)
-    , Value (Value, FinalValue)
-    , every
-    , isFinal
-    , silent
-    , value
+    , TimePeriod (TimePeriod)
     , withMonitor ) where
 
 import Control.Applicative
 import Control.Concurrent       hiding (yield)
 import Control.Concurrent.Async
+import Control.Exception               (throwIO)
 import Control.Foldl                   (Fold)
 import Control.Monad
+import Data.Maybe                      (fromMaybe)
 import Data.Time.Clock
 import Pipes                    hiding (every)
-import Pipes.Concurrent
+import Pipes.Concurrent                (atomically, STM)
 import Pipes.Prelude
 import Prelude                  hiding (map, take, takeWhile)
 
-import qualified Control.Foldl as F
-import qualified Pipes.Prelude as P
+import qualified Control.Foldl    as F
+import qualified Pipes            as P
+import qualified Pipes.Concurrent as P
+import qualified Pipes.Prelude    as P
 
-newtype Period = Period NominalDiffTime
+newtype TimePeriod = TimePeriod NominalDiffTime
     deriving (Enum, Eq, Fractional, Num, Ord, Real, RealFrac, Show)
-
-every :: Period -> Pipe (Value a) (Value a) IO ()
-every = yieldPeriodicallyUntil isFinal
 
 yieldUntil :: (a -> Bool) -> Pipe a a IO ()
 yieldUntil isFinal = loop where
@@ -37,11 +36,11 @@ yieldUntil isFinal = loop where
         yield v
         unless (isFinal v) loop
 
-yieldPeriodically :: Period -> Pipe a a IO ()
+yieldPeriodically :: MonadIO m => TimePeriod -> Pipe a a m ()
 yieldPeriodically = yieldPeriodicallyUntil $ const False
 
-yieldPeriodicallyUntil :: (a -> Bool) -> Period -> Pipe a a IO ()
-yieldPeriodicallyUntil isFinal (Period p) =
+yieldPeriodicallyUntil :: MonadIO m => (a -> Bool) -> TimePeriod -> Pipe a a m ()
+yieldPeriodicallyUntil isFinal (TimePeriod p) =
     t =<< liftIO getCurrentTime where
         t next = do
             liftIO $ pauseThreadUntil next
@@ -56,22 +55,57 @@ pauseThreadUntil t = do
         LT -> threadDelay $ truncate $ diffUTCTime t now * 1000000
         _  -> return ()
 
-type Monitor a = Consumer (Value a) IO ()
+data Action chunk m r = Action
+    { runAction :: Pipe chunk chunk m () -> m r }
 
-data Value a = Value a | FinalValue a
+data Counter chunk count m = Counter
+    { counter      :: Pipe chunk count m ()
+    , counterStart :: count }
 
-isFinal (     Value _) = False
-isFinal (FinalValue _) = True
+data Monitor count m = Monitor
+    { monitor        :: Consumer (ProgressEvent count) m ()
+    , monitorPeriod  :: TimePeriod }
 
-value (     Value v) = v
-value (FinalValue v) = v
+catCounter :: Monad m => a -> Counter a a m
+catCounter a = Counter
+    { counter = P.cat
+    , counterStart = a }
 
-instance Functor Value where
-    fmap f (     Value v) =      Value $ f v
-    fmap f (FinalValue v) = FinalValue $ f v
+data ProgressEvent v
+    = ProgressUpdateEvent v
+    | ProgressCompletedEvent
+    | ProgressInterruptedEvent
 
-silent :: Monitor a
-silent = yieldPeriodicallyUntil isFinal 0.1 >-> forever await
+isFinal (ProgressUpdateEvent _) = False
+isFinal ProgressCompletedEvent = True
+isFinal ProgressInterruptedEvent = True
+
+instance Functor ProgressEvent where
+    fmap f (ProgressUpdateEvent v) = ProgressUpdateEvent $ f v
+    fmap _ ProgressCompletedEvent = ProgressCompletedEvent
+    fmap _ ProgressInterruptedEvent = ProgressInterruptedEvent
+
+type BufferSpecification a = P.Buffer a
+
+newtype Buffer a = Buffer (P.Output a, P.Input a, STM ())
+
+bufferWrite :: Buffer a -> a -> STM Bool
+bufferWrite (Buffer (o, i, k)) = P.send o
+
+bufferRead :: Buffer a -> STM (Maybe a)
+bufferRead (Buffer (o, i, k)) = P.recv i
+
+fromBuffer :: MonadIO m => Buffer a -> Producer a m ()
+fromBuffer (Buffer (o, i, k)) = P.fromInput i
+
+toBuffer :: MonadIO m => Buffer a -> Consumer a m ()
+toBuffer (Buffer (o, i, k)) = P.toOutput o
+
+createBuffer :: BufferSpecification a -> IO (Buffer a)
+createBuffer s = Buffer <$> P.spawn' s
+
+sealBuffer :: Buffer a -> IO ()
+sealBuffer (Buffer (o, i, k)) = P.atomically k
 
 -- | periods: │<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│
 -- |  chunks:    c c c c c c     c c c c c c c         c c c c c     c c c
@@ -81,28 +115,42 @@ silent = yieldPeriodicallyUntil isFinal 0.1 >-> forever await
 -- |   update      chunk                                           chunk    update
 -- |
 withMonitor
-    :: MonadIO m
-    => Monitor count
-    -> count
-    -> Pipe chunk count m () -- this should be a pipe
-    -> (Pipe chunk chunk m () -> m a)
-    -> m a
-withMonitor monitor count counter run = do
-    (o, i) <- liftIO $ spawn $ latest $ Value count
-    e <- liftIO $ asyncWithGC $
-        runEffect $
-            (yield (Value count) >> fromInput i)
-            -- >-> yieldUntil isFinal
-            >-> monitor
-    result <- run $ tee $ counter >-> map Value >-> toOutput o
-    liftIO $ do
-        atomically $ recv i >>= send o . FinalValue . maybe count value
-        wait e
-    return result
+    :: Action  chunk       IO r
+    -> Counter chunk count IO
+    -> Monitor       count IO
+    ->                     IO r
+withMonitor Action {..} Counter {..} Monitor {..} = do
+    countBuffer <- liftIO $ createBuffer $ P.latest counterStart
+    eventBuffer <- liftIO $ createBuffer $ P.bounded 1
+    notifyAction <- liftIO $ async $ runEffect $
+        fromBuffer eventBuffer >-> monitor
+    updateAction <- liftIO $ async $ runEffect $
+        fromBuffer countBuffer
+            >-> yieldPeriodically monitorPeriod
+            >-> P.map ProgressUpdateEvent
+            >-> toBuffer eventBuffer
+    mainAction <- liftIO $ async $ runAction $
+        tee $ counter >-> toBuffer countBuffer
+    waitCatch mainAction >>= \case
+        Left exception -> do
+            atomically $
+                bufferWrite eventBuffer ProgressInterruptedEvent
+            sealBuffer eventBuffer
+            sealBuffer countBuffer
+            throwIO exception
+        Right result -> do
+            atomically $
+                bufferRead countBuffer
+                    >>= bufferWrite eventBuffer
+                        . ProgressUpdateEvent
+                        . fromMaybe counterStart
+            atomically $
+                bufferWrite eventBuffer ProgressCompletedEvent
+            pure result
 
 asyncWithGC :: IO a -> IO (Async a)
 asyncWithGC a = async $ do
     r <- a
-    performGC
+    P.performGC
     return r
 
