@@ -23,6 +23,7 @@ import Prelude                  hiding (map, take, takeWhile)
 
 import qualified Control.Foldl    as F
 import qualified Pipes            as P
+import qualified Pipes.Buffer     as B
 import qualified Pipes.Concurrent as P
 import qualified Pipes.Prelude    as P
 
@@ -86,28 +87,6 @@ instance Functor ProgressEvent where
     fmap _ ProgressCompletedEvent = ProgressCompletedEvent
     fmap _ ProgressInterruptedEvent = ProgressInterruptedEvent
 
-type BufferSpecification a = P.Buffer a
-
-newtype Buffer a = Buffer (P.Output a, P.Input a, STM ())
-
-bufferWrite :: Buffer a -> a -> STM Bool
-bufferWrite (Buffer (o, i, k)) = P.send o
-
-bufferRead :: Buffer a -> STM (Maybe a)
-bufferRead (Buffer (o, i, k)) = P.recv i
-
-fromBuffer :: MonadIO m => Buffer a -> Producer a m ()
-fromBuffer (Buffer (o, i, k)) = P.fromInput i
-
-toBuffer :: MonadIO m => Buffer a -> Consumer a m ()
-toBuffer (Buffer (o, i, k)) = P.toOutput o
-
-createBuffer :: BufferSpecification a -> IO (Buffer a)
-createBuffer s = Buffer <$> P.spawn' s
-
-sealBuffer :: Buffer a -> IO ()
-sealBuffer (Buffer (o, i, k)) = P.atomically k
-
 -- | periods: │<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│
 -- |  chunks:    c c c c c c     c c c c c c c         c c c c c     c c c
 -- | updates: u  │    u       u       u       u       u       u       u  │u
@@ -121,33 +100,33 @@ withMonitor
     -> Monitor       count IO
     ->                     IO r
 withMonitor Action {..} Counter {..} Monitor {..} = do
-    countBuffer <- liftIO $ createBuffer $ P.latest counterStart
-    eventBuffer <- liftIO $ createBuffer $ P.bounded 1
+    countBuffer <- liftIO $ B.create $ P.latest counterStart
+    eventBuffer <- liftIO $ B.create $ P.bounded 1
     notifyAction <- liftIO $ async $ runEffect $
-        fromBuffer eventBuffer >-> monitor
+        B.read eventBuffer >-> monitor
     updateAction <- liftIO $ async $ runEffect $
-        fromBuffer countBuffer
+        B.read countBuffer
             >-> yieldPeriodically monitorPeriod
             >-> P.map ProgressUpdateEvent
-            >-> toBuffer eventBuffer
+            >-> B.write eventBuffer
     mainAction <- liftIO $ async $ runAction $
-        tee $ counter >-> toBuffer countBuffer
+        tee $ counter >-> B.write countBuffer
     waitCatch mainAction >>= \case
         Left exception -> do
             -- we should be cancelling actions here
             atomically $
-                bufferWrite eventBuffer ProgressInterruptedEvent
-            sealBuffer eventBuffer
-            sealBuffer countBuffer
+                B.writeOnce eventBuffer ProgressInterruptedEvent
+            B.seal eventBuffer
+            B.seal countBuffer
             throwIO exception
         Right result -> do
             atomically $
-                bufferRead countBuffer
-                    >>= bufferWrite eventBuffer
+                B.readOnce countBuffer
+                    >>= B.writeOnce eventBuffer
                         . ProgressUpdateEvent
                         . fromMaybe counterStart
             atomically $
-                bufferWrite eventBuffer ProgressCompletedEvent
+                B.writeOnce eventBuffer ProgressCompletedEvent
             pure result
 
 asyncWithGC :: IO a -> IO (Async a)
