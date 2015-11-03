@@ -5,18 +5,18 @@
 
 module Pipes.Progress
     ( Monitor
-    , TimePeriod (TimePeriod)
+    , TimePeriod ( TimePeriod )
     , withMonitor ) where
 
-import Control.Concurrent              (threadDelay)
-import Control.Concurrent.Async        (Async, async, waitCatch)
-import Control.Exception               (throwIO)
-import Control.Monad                   (unless)
-import Data.Maybe                      (fromMaybe)
-import Data.Time.Clock                 (NominalDiffTime, UTCTime, getCurrentTime, addUTCTime, diffUTCTime)
-import Pipes                           ((>->), Consumer, Pipe, Producer, MonadIO, await, liftIO, yield, runEffect)
-import Pipes.Concurrent                (atomically, STM)
-import Prelude                  hiding (map, take, takeWhile)
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (Async, async, waitCatch)
+import Control.Exception (throwIO)
+import Control.Monad (unless)
+import Control.Monad.Trans (MonadIO, liftIO)
+import Data.Maybe (fromMaybe)
+import Data.Time.Clock (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
+import Pipes (Consumer, Pipe, Producer, await, runEffect, yield, (>->))
+import Pipes.Concurrent (STM, atomically)
 
 import qualified Control.Foldl    as F
 import qualified Pipes            as P
@@ -61,8 +61,8 @@ data Counter chunk count m = Counter
     , counterStart :: count }
 
 data Monitor count m = Monitor
-    { monitor        :: Consumer (ProgressEvent count) m ()
-    , monitorPeriod  :: TimePeriod }
+    { monitor       :: Consumer (ProgressEvent count) m ()
+    , monitorPeriod :: TimePeriod }
 
 catCounter :: Monad m => a -> Counter a a m
 catCounter a = Counter
