@@ -8,17 +8,14 @@ module Pipes.Progress
     , TimePeriod (TimePeriod)
     , withMonitor ) where
 
-import Control.Applicative
-import Control.Concurrent       hiding (yield)
-import Control.Concurrent.Async
+import Control.Concurrent              (threadDelay)
+import Control.Concurrent.Async        (Async, async, waitCatch)
 import Control.Exception               (throwIO)
-import Control.Foldl                   (Fold)
-import Control.Monad
+import Control.Monad                   (unless)
 import Data.Maybe                      (fromMaybe)
-import Data.Time.Clock
-import Pipes                    hiding (every)
+import Data.Time.Clock                 (NominalDiffTime, UTCTime, getCurrentTime, addUTCTime, diffUTCTime)
+import Pipes                           ((>->), Consumer, Pipe, Producer, MonadIO, await, liftIO, yield, runEffect)
 import Pipes.Concurrent                (atomically, STM)
-import Pipes.Prelude
 import Prelude                  hiding (map, take, takeWhile)
 
 import qualified Control.Foldl    as F
@@ -110,7 +107,7 @@ withMonitor Action {..} Counter {..} Monitor {..} = do
             >-> P.map ProgressUpdateEvent
             >-> B.write eventBuffer
     mainAction <- liftIO $ async $ runAction $
-        tee $ counter >-> B.write countBuffer
+        P.tee $ counter >-> B.write countBuffer
     waitCatch mainAction >>= \case
         Left exception -> do
             -- we should be cancelling actions here
