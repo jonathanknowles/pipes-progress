@@ -71,6 +71,7 @@ catCounter a = Counter
     { counter = P.cat
     , counterStart = a }
 
+-- TODO: incorporate time into the events.
 data ProgressEvent v
     = ProgressUpdateEvent v
     | ProgressCompletedEvent
@@ -133,6 +134,7 @@ withMonitor Action {..} Counter {..} Monitor {..} = do
         tee $ counter >-> toBuffer countBuffer
     waitCatch mainAction >>= \case
         Left exception -> do
+            -- we should be cancelling actions here
             atomically $
                 bufferWrite eventBuffer ProgressInterruptedEvent
             sealBuffer eventBuffer
