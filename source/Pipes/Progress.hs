@@ -113,7 +113,7 @@ runMonitoredEffect period start source target = do
     let e1 = B.read b0 >-> yieldPeriodically period >-> B.write b1
     let e2 = B.read b1 >-> target
     withAsync (runEffect e2) $ \a -> do
-        result <- withAsync (runEffect e1) $ const $ runEffect e0
+        result <- withAsync (runEffect e1) $ const (runEffect e0)
         liftIO $ do
             atomically $
                 B.writeOnce b1 . fromMaybe start =<< B.readOnce b0
