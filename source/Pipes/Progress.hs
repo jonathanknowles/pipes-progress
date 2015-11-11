@@ -1,28 +1,32 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase                 #-}
-{-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE ExistentialQuantification  #-}
+{-# LANGUAGE FlexibleContexts           #-}
 
 module Pipes.Progress
-    ( Monitor
-    , TimePeriod ( TimePeriod )
-    , withMonitor ) where
+    where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (Async, async, waitCatch)
+import Control.Concurrent.Async (cancel, waitCatch)
+import Control.Concurrent.Async.Lifted (Async, async, wait, withAsync)
 import Control.Exception (throwIO)
-import Control.Monad (unless)
+import Control.Monad (forever, unless)
 import Control.Monad.Trans (MonadIO, liftIO)
+import Control.Monad.Trans.Control (MonadBaseControl)
 import Data.Maybe (fromMaybe)
 import Data.Time.Clock (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
-import Pipes (Consumer, Pipe, Producer, await, runEffect, yield, (>->))
+import Pipes (Consumer, Effect (..), Pipe, Producer, await, runEffect, yield, (>->))
+import Pipes.Buffer (Buffer)
 import Pipes.Concurrent (STM, atomically)
+import Pipes.Safe (MonadSafe, SafeT)
 
-import qualified Control.Foldl    as F
-import qualified Pipes            as P
-import qualified Pipes.Buffer     as B
-import qualified Pipes.Concurrent as P
-import qualified Pipes.Prelude    as P
+import qualified Control.Foldl     as F
+import qualified Pipes             as P
+import qualified Pipes.Buffer      as B
+import qualified Pipes.Concurrent  as P
+import qualified Pipes.Prelude     as P
+import qualified Pipes.Safe        as PS
 
 newtype TimePeriod = TimePeriod NominalDiffTime
     deriving (Enum, Eq, Fractional, Num, Ord, Real, RealFrac, Show)
@@ -34,8 +38,13 @@ yieldUntil isFinal = loop where
         yield v
         unless (isFinal v) loop
 
-yieldPeriodically :: MonadIO m => TimePeriod -> Pipe a a m ()
-yieldPeriodically = yieldPeriodicallyUntil $ const False
+yieldPeriodically :: MonadIO m => TimePeriod -> Pipe a a m r
+yieldPeriodically (TimePeriod p)=
+    loop =<< liftIO getCurrentTime where
+        loop next = do
+            liftIO $ pauseThreadUntil next
+            await >>= yield
+            loop $ addUTCTime p next
 
 yieldPeriodicallyUntil :: MonadIO m => (a -> Bool) -> TimePeriod -> Pipe a a m ()
 yieldPeriodicallyUntil isFinal (TimePeriod p) =
@@ -91,44 +100,34 @@ instance Functor ProgressEvent where
 -- |    first─┘  └─first                                           final─┘└─last
 -- |   update      chunk                                           chunk    update
 -- |
-withMonitor
-    :: Action  chunk       IO r
-    -> Counter chunk count IO
-    -> Monitor       count IO
-    ->                     IO r
-withMonitor Action {..} Counter {..} Monitor {..} = do
-    countBuffer <- liftIO $ B.create $ P.latest counterStart
-    eventBuffer <- liftIO $ B.create $ P.bounded 1
-    notifyAction <- liftIO $ async $ runEffect $
-        B.read eventBuffer >-> monitor
-    updateAction <- liftIO $ async $ runEffect $
-        B.read countBuffer
-            >-> yieldPeriodically monitorPeriod
-            >-> P.map ProgressUpdateEvent
-            >-> B.write eventBuffer
-    mainAction <- liftIO $ async $ runAction $
-        P.tee $ counter >-> B.write countBuffer
-    waitCatch mainAction >>= \case
-        Left exception -> do
-            -- we should be cancelling actions here
+runMonitoredEffect :: (MonadBaseControl IO m, MonadIO m)
+    => TimePeriod
+    -> a
+    -> Producer a m r
+    -> Consumer a m ()
+    -> m r
+runMonitoredEffect period start source target = do
+    b0 <- B.create $ P.latest start
+    b1 <- B.create $ P.bounded 1
+    let e0 = source >-> (B.write b0 >> forever await)
+    let e1 = B.read b0 >-> yieldPeriodically period >-> B.write b1
+    let e2 = B.read b1 >-> target
+    withAsync (runEffect e2) $ \a -> do
+        result <- withAsync (runEffect e1) $ const $ runEffect e0
+        liftIO $ do
             atomically $
-                B.writeOnce eventBuffer ProgressInterruptedEvent
-            B.seal eventBuffer
-            B.seal countBuffer
-            throwIO exception
-        Right result -> do
-            atomically $
-                B.readOnce countBuffer
-                    >>= B.writeOnce eventBuffer
-                        . ProgressUpdateEvent
-                        . fromMaybe counterStart
-            atomically $
-                B.writeOnce eventBuffer ProgressCompletedEvent
-            pure result
+                B.writeOnce b1 . fromMaybe start =<< B.readOnce b0
+            wait a
+        pure result
 
 asyncWithGC :: IO a -> IO (Async a)
 asyncWithGC a = async $ do
     r <- a
     P.performGC
     return r
+
+data Sample a = Sample TimeStamp a
+
+type TimeStamp  = UTCTime
+
 

@@ -22,9 +22,13 @@ library
         base >=4.8 && <4.9,
         async,
         foldl,
+        lifted-async,
+        monad-control,
         mtl,
         pipes,
         pipes-concurrency,
+        pipes-extras,
+        pipes-safe,
         time
     hs-source-dirs:
         source
