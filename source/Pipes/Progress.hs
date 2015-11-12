@@ -19,6 +19,7 @@ import Data.Time.Clock (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime, getCu
 import Pipes (Consumer, Effect (..), Pipe, Producer, await, runEffect, yield, (>->))
 import Pipes.Buffer (Buffer)
 import Pipes.Concurrent (STM, atomically)
+import Pipes.Termination (Terminated (..))
 import Pipes.Safe (MonadSafe, SafeT)
 
 import qualified Control.Foldl     as F
@@ -62,36 +63,9 @@ pauseThreadUntil t = do
         LT -> threadDelay $ truncate $ diffUTCTime t now * 1000000
         _  -> return ()
 
-data Action chunk m r = Action
-    { runAction :: Pipe chunk chunk m () -> m r }
-
-data Counter chunk count m = Counter
-    { counter      :: Pipe chunk count m ()
-    , counterStart :: count }
-
-data Monitor count m = Monitor
-    { monitor       :: Consumer (ProgressEvent count) m ()
+data Monitor a m = Monitor
+    { monitor       :: Consumer (Terminated a) m ()
     , monitorPeriod :: TimePeriod }
-
-catCounter :: Monad m => a -> Counter a a m
-catCounter a = Counter
-    { counter = P.cat
-    , counterStart = a }
-
--- TODO: incorporate time into the events.
-data ProgressEvent v
-    = ProgressUpdateEvent v
-    | ProgressCompletedEvent
-    | ProgressInterruptedEvent
-
-isFinal (ProgressUpdateEvent _) = False
-isFinal ProgressCompletedEvent = True
-isFinal ProgressInterruptedEvent = True
-
-instance Functor ProgressEvent where
-    fmap f (ProgressUpdateEvent v) = ProgressUpdateEvent $ f v
-    fmap _ ProgressCompletedEvent = ProgressCompletedEvent
-    fmap _ ProgressInterruptedEvent = ProgressInterruptedEvent
 
 -- | periods: │<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│
 -- |  chunks:    c c c c c c     c c c c c c c         c c c c c     c c c
@@ -125,9 +99,4 @@ asyncWithGC a = async $ do
     r <- a
     P.performGC
     return r
-
-data Sample a = Sample TimeStamp a
-
-type TimeStamp  = UTCTime
-
 
