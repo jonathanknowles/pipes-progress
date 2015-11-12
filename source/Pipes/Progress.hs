@@ -5,39 +5,29 @@
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE RecordWildCards            #-}
 
-module Pipes.Progress
-    where
+module Pipes.Progress where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async.Lifted (Async, async, cancel, wait, withAsync)
-import Control.Monad (forever, join, unless)
+import Control.Concurrent.Async.Lifted (wait, withAsync)
+import Control.Monad (forever, join)
 import Control.Monad.Trans (MonadIO, liftIO)
 import Control.Monad.Trans.Control (MonadBaseControl)
 import Data.Maybe (fromMaybe)
-import Data.Monoid ((<>))
 import Data.Time.Clock (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
-import Pipes (Consumer, Effect (..), Pipe, Producer, await, runEffect, yield, (>->))
+import Pipes (Consumer, Pipe, Producer, await, runEffect, yield, (>->))
 import Pipes.Buffer (Buffer)
-import Pipes.Concurrent (STM, atomically)
+import Pipes.Concurrent (atomically)
 import Pipes.Termination (Terminated (..))
-import Pipes.Safe (MonadSafe, SafeT)
+import Pipes.Safe (MonadSafe)
 
-import qualified Control.Foldl     as F
-import qualified Pipes             as P
-import qualified Pipes.Buffer      as B
-import qualified Pipes.Concurrent  as P
-import qualified Pipes.Prelude     as P
-import qualified Pipes.Safe        as PS
+import qualified Pipes            as P
+import qualified Pipes.Buffer     as B
+import qualified Pipes.Concurrent as P
+import qualified Pipes.Prelude    as P
+import qualified Pipes.Safe       as PS
 
 newtype TimePeriod = TimePeriod NominalDiffTime
     deriving (Enum, Eq, Fractional, Num, Ord, Real, RealFrac, Show)
-
-yieldUntil :: (a -> Bool) -> Pipe a a IO ()
-yieldUntil isFinal = loop where
-    loop = do
-        v <- await
-        yield v
-        unless (isFinal v) loop
 
 yieldPeriodically :: MonadIO m => TimePeriod -> Pipe a a m r
 yieldPeriodically (TimePeriod p)=
@@ -46,15 +36,6 @@ yieldPeriodically (TimePeriod p)=
             liftIO $ pauseThreadUntil next
             await >>= yield
             loop $ addUTCTime p next
-
-yieldPeriodicallyUntil :: MonadIO m => (a -> Bool) -> TimePeriod -> Pipe a a m ()
-yieldPeriodicallyUntil isFinal (TimePeriod p) =
-    t =<< liftIO getCurrentTime where
-        t next = do
-            liftIO $ pauseThreadUntil next
-            v <- await
-            yield v
-            unless (isFinal v) (t $ addUTCTime p next)
 
 pauseThreadUntil :: UTCTime -> IO ()
 pauseThreadUntil t = do
@@ -72,11 +53,11 @@ data Monitor a m = Monitor
     , monitorPeriod :: TimePeriod }
 
 -- | periods: │<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│
--- |  chunks:    c c c c c c     c c c c c c c         c c c c c     c c c
--- | updates: u  │    u       u       u       u       u       u       u  │u
+-- |  signal:    c c c c c c     c c c c c c c         c c c c c     c c c
+-- | monitor: u  │    u       u       u       u       u       u       u  │u
 -- |          │  │                                                       ││
 -- |    first─┘  └─first                                           final─┘└─last
--- |   update      chunk                                           chunk    update
+-- |   output      input                                           input    output
 -- |
 runMonitoredEffect :: (MonadBaseControl IO m, MonadIO m)
     => Signal a m r -> Monitor a m -> m r
@@ -105,10 +86,4 @@ runMonitoredEffect Signal {..} Monitor {..} = do
                 wait a
             pure result
         pure result
-
-asyncWithGC :: IO a -> IO (Async a)
-asyncWithGC a = async $ do
-    r <- a
-    P.performGC
-    return r
 
