@@ -16,6 +16,7 @@ cabal-version:       >=1.10
 library
     exposed-modules:
         Pipes.Progress
+        Pipes.Termination
     -- other-modules:
     -- other-extensions:
     build-depends:
