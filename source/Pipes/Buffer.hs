@@ -2,9 +2,8 @@ module Pipes.Buffer where
 
 import Control.Monad (forever, when)
 import Control.Monad.Trans (MonadIO, liftIO)
-import Pipes (Consumer, Producer, await)
-import Pipes.Concurrent (atomically, STM)
-import Pipes.Safe (MonadSafe)
+import Pipes (Consumer, Producer)
+import Pipes.Concurrent (STM)
 
 import qualified Pipes.Concurrent as PC
 import qualified Pipes.Safe       as PS
