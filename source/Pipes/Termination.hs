@@ -56,7 +56,13 @@ foldReturnLast step begin done = loop begin where
         (loop . step x)
 {-# INLINABLE foldReturnLast #-}
 
-returnLast :: Monad m => a -> Consumer (Terminated a) m a
-returnLast last = await >>= terminated (pure last) returnLast
-{-# INLINABLE returnLast #-}
+returnLastConsumed :: Monad m => a -> Consumer (Terminated a) m a
+returnLastConsumed last = await >>= terminated (pure last) returnLastConsumed
+{-# INLINABLE returnLastConsumed #-}
+
+returnLastProduced :: Monad m => a -> Producer a m r -> Producer a m a
+returnLastProduced last producer =
+    signalLast producer
+    >-> P.tee (returnLastConsumed last)
+    >-> unsignalLast
 
