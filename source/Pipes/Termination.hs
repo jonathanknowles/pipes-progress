@@ -31,10 +31,21 @@ terminated _ f (Value v) = f v
 
 signalLast :: Monad m => Producer a m r -> Producer (Terminated a) m s
 signalLast p = (p >-> P.map Value) >> forever (yield End)
+{-# INLINABLE signalLast #-}
 
 unsignalLast :: Monad m => Pipe (Terminated a) a m s
 unsignalLast = P.concat
 {-# INLINABLE unsignalLast #-}
+
+foldReturn :: Monad m
+    => (x -> a -> x) -> x -> (x -> b)
+    -> Producer a m r
+    -> Producer a m b
+foldReturn step begin done p =
+    signalLast p
+    >-> P.tee (foldReturnLast step begin done)
+    >-> unsignalLast
+{-# INLINABLE foldReturn #-}
 
 foldReturnLast:: Monad m
     => (x -> a -> x) -> x -> (x -> b)
