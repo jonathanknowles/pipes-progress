@@ -65,4 +65,4 @@ returnLastProduced last producer =
     signalLast producer
     >-> P.tee (returnLastConsumed last)
     >-> unsignalLast
-
+{-# INLINABLE returnLastProduced #-}
