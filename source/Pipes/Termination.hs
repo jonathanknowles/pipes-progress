@@ -27,15 +27,15 @@ instance Foldable Terminated where
 terminated :: b -> (a -> b) -> Terminated a -> b
 terminated e _ (End    ) = e
 terminated _ f (Value v) = f v
-{-# INLINABLE terminated #-}
+{-# INLINE terminated #-}
 
 signalLast :: Monad m => Producer a m r -> Producer (Terminated a) m s
 signalLast p = (p >-> P.map Value) >> forever (yield End)
-{-# INLINABLE signalLast #-}
+{-# INLINE signalLast #-}
 
 unsignalLast :: Monad m => Pipe (Terminated a) a m s
 unsignalLast = P.concat
-{-# INLINABLE unsignalLast #-}
+{-# INLINE unsignalLast #-}
 
 foldReturn :: Monad m
     => (x -> a -> x) -> x -> (x -> b)
@@ -45,7 +45,7 @@ foldReturn step begin done p =
     signalLast p
     >-> P.tee (foldReturnLast step begin done)
     >-> unsignalLast
-{-# INLINABLE foldReturn #-}
+{-# INLINE foldReturn #-}
 
 foldReturnLast:: Monad m
     => (x -> a -> x) -> x -> (x -> b)
@@ -54,15 +54,17 @@ foldReturnLast step begin done = loop begin where
     loop !x = await >>= terminated
         (pure $ done x)
         (loop . step x)
-{-# INLINABLE foldReturnLast #-}
+{-# INLINE foldReturnLast #-}
 
 returnLastConsumed :: Monad m => a -> Consumer (Terminated a) m a
 returnLastConsumed last = await >>= terminated (pure last) returnLastConsumed
-{-# INLINABLE returnLastConsumed #-}
+{-# INLINE returnLastConsumed #-}
 
 returnLastProduced :: Monad m => a -> Producer a m r -> Producer a m a
-returnLastProduced last producer =
-    signalLast producer
-    >-> P.tee (returnLastConsumed last)
-    >-> unsignalLast
-{-# INLINABLE returnLastProduced #-}
+returnLastProduced last producer = signalLast producer >-> returnLastPiped last
+{-# INLINE returnLastProduced #-}
+
+returnLastPiped :: Monad m => a -> Pipe (Terminated a) a m a
+returnLastPiped last = await >>= terminated (pure last) (\this -> yield this >> returnLastPiped this)
+{-# INLINE returnLastPiped #-}
+
