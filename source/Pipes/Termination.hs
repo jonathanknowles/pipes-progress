@@ -57,14 +57,14 @@ foldReturnLast step begin done = loop begin where
 {-# INLINE foldReturnLast #-}
 
 returnLastConsumed :: Monad m => a -> Consumer (Terminated a) m a
-returnLastConsumed last = await >>= terminated (pure last) returnLastConsumed
+returnLastConsumed !last = await >>= terminated (pure last) returnLastConsumed
 {-# INLINE returnLastConsumed #-}
 
 returnLastProduced :: Monad m => a -> Producer a m r -> Producer a m a
-returnLastProduced last producer = signalLast producer >-> returnLastPiped last
+returnLastProduced !last producer = signalLast producer >-> returnLastPiped last
 {-# INLINE returnLastProduced #-}
 
 returnLastPiped :: Monad m => a -> Pipe (Terminated a) a m a
-returnLastPiped last = await >>= terminated (pure last) (\this -> yield this >> returnLastPiped this)
+returnLastPiped !last = await >>= terminated (pure last) (\this -> yield this >> returnLastPiped this)
 {-# INLINE returnLastPiped #-}
 

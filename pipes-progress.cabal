@@ -38,5 +38,6 @@ library
     ghc-options:
         -O3
         -threaded
+        -funbox-strict-fields
         -rtsopts
         -with-rtsopts=-N
