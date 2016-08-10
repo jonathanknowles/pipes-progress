@@ -28,6 +28,7 @@ import qualified Pipes.Concurrent as P
 import qualified Pipes.Prelude    as P
 import qualified Pipes.Safe       as PS
 
+-- TODO: get rid of this: it should be a parameter.
 class Start s where start :: s
 
 newtype Start s => MonitorableEffect s m r = MonitorableEffect (Producer s m r)
