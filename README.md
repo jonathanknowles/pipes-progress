@@ -23,3 +23,8 @@ Documentation
 
 For more details, take a look at the [`Pipes.Progress`](https://github.com/jonathanknowles/pipes-progress/blob/master/source/Pipes/Progress.hs) module, which contains a detailed description of the evaluation model.
 
+Examples
+--------
+
+For a demonstration of how to use the library, see the code examples within the [pipes-progress-examples](https://github.com/jonathanknowles/pipes-progress-examples) package.
+
