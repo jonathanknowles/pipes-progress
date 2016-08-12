@@ -1,11 +1,6 @@
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards            #-}
-{-# LANGUAGE MultiParamTypeClasses      #-}
---{-# LANGUAGE FunctionalDependencies     #-}
-{-# LANGUAGE TypeFamilies               #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE FlexibleInstances #-}
 
 module Pipes.Progress where
 
@@ -39,13 +34,15 @@ data Monitor s m = Monitor
 newtype TimePeriod = TimePeriod NominalDiffTime
     deriving (Enum, Eq, Fractional, Num, Ord, Real, RealFrac, Show)
 
--- | periods: │<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│
--- |  inputs:    i i i i i i     i i i i i i i         i i i i i     i i i
--- | outputs: o  │    o       o       o       o       o       o       o  │o
--- |          │  │                                                       ││
--- |    first─┘  └─first                                           final─┘└─last
--- |   output      input                                           input    output
-
+-- | Runs the specified effect, passing updates to the specified monitor.
+--
+-- > periods: │<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│<--p-->│
+-- >  inputs:    i i i i i i     i i i i i i i         i i i i i     i i i
+-- > outputs: o  │    o       o       o       o       o       o       o  │o
+-- >          │  │                                                       ││
+-- >    first─┘  └─first                                           final─┘└─last
+-- >   output      input                                           input    output
+--
 runMonitoredEffect :: (MonadBaseControl IO m, MonadIO m)
     => Monitor s m -> MonitorableEffect s m r -> m r
 runMonitoredEffect Monitor {..} MonitorableEffect {..} = do
